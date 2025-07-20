@@ -5,7 +5,7 @@
 Анализатор документов с поддержкой различных форматов
 Поддерживает PDF, DOCX, RTF, TXT, изображения и архивы
 
-Версия: 2.0.0 "ZIP Master"
+Версия: 2.1.0 "JSON Master"
 Дата выпуска: 20 июля 2025
 Статус: Стабильная версия
 """
@@ -1148,7 +1148,7 @@ class DocumentAnalyzerGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Анализатор документов v2.0")
+        self.root.title("Анализатор документов v2.1")
         self.root.geometry("800x600")
         
         # Инициализация компонентов
@@ -1175,6 +1175,9 @@ class DocumentAnalyzerGUI:
         self.failed_files = []
         self.full_text_parts = []
         self.statistics = {}
+        
+        # Детальная информация о файлах для JSON
+        self.file_details = {}  # {filepath: {info, text, errors, etc}}
         
         # Переменные для отслеживания времени
         self.start_time = None
@@ -1533,11 +1536,38 @@ class DocumentAnalyzerGUI:
     def process_single_file(self, filepath: str) -> Optional[str]:
         """Обработка одного файла"""
         try:
+            # Собираем информацию о файле
+            file_info = {
+                'path': os.path.relpath(filepath, self.selected_folders[0]),
+                'full_path': filepath,
+                'size': os.path.getsize(filepath),
+                'extension': Path(filepath).suffix.lower(),
+                'filename': Path(filepath).name,
+                'processing_time': None,
+                'status': 'failed',
+                'text': '',
+                'text_length': 0,
+                'errors': [],
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Засекаем время обработки
+            start_time = time.time()
+            
             text, success = self.processor.extract_text(filepath)
+            
+            # Рассчитываем время обработки
+            processing_time = time.time() - start_time
+            file_info['processing_time'] = round(processing_time, 2)
             
             if success and text.strip():
                 relative_path = os.path.relpath(filepath, self.selected_folders[0])
                 self.log_message(f"✅ {relative_path}")
+                
+                # Обновляем информацию о файле
+                file_info['status'] = 'success'
+                file_info['text'] = text.strip()
+                file_info['text_length'] = len(text.strip())
                 
                 # Добавляем в общий текст
                 part = f"{'='*60}\nФАЙЛ: {relative_path}\n{'='*60}\n{text.strip()}\n"
@@ -1546,11 +1576,17 @@ class DocumentAnalyzerGUI:
                 # Обновляем статистику
                 self.update_statistics(filepath, len(text))
                 
+                # Сохраняем детальную информацию
+                self.file_details[filepath] = file_info
+                
                 return relative_path
             else:
                 relative_path = os.path.relpath(filepath, self.selected_folders[0])
                 self.log_message(f"❌ {relative_path}")
                 self.failed_files.append(relative_path)
+                
+                # Обновляем информацию об ошибке
+                file_info['errors'].append("Не удалось извлечь текст или файл пустой")
                 
                 # Записываем ошибку в лог
                 self.error_logger.log_error(
@@ -1559,10 +1595,16 @@ class DocumentAnalyzerGUI:
                     "ОБРАБОТКА"
                 )
                 
+                # Сохраняем детальную информацию
+                self.file_details[filepath] = file_info
+                
         except Exception as e:
             relative_path = os.path.relpath(filepath, self.selected_folders[0])
             self.log_message(f"❌ {relative_path}: {e}", "ERROR")
             self.failed_files.append(relative_path)
+            
+            # Обновляем информацию об ошибке
+            file_info['errors'].append(str(e))
             
             # Записываем ошибку в лог
             self.error_logger.log_error(
@@ -1570,6 +1612,9 @@ class DocumentAnalyzerGUI:
                 str(e), 
                 "ИСКЛЮЧЕНИЕ"
             )
+            
+            # Сохраняем детальную информацию
+            self.file_details[filepath] = file_info
         
         return None
     
@@ -1638,17 +1683,94 @@ class DocumentAnalyzerGUI:
         if result and self.full_text_parts:
             self.save_results()
     
+    def create_json_data(self) -> dict:
+        """Создание структурированных данных для JSON"""
+        # Рассчитываем общее время обработки
+        total_time = 0
+        if self.start_time:
+            total_time = time.time() - self.start_time
+        
+        # Форматируем время
+        if total_time > 3600:
+            hours = int(total_time // 3600)
+            minutes = int((total_time % 3600) // 60)
+            time_str = f"{hours}ч {minutes}мин"
+        elif total_time > 60:
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            time_str = f"{minutes}мин {seconds}сек"
+        else:
+            seconds = int(total_time)
+            time_str = f"{seconds}сек"
+        
+        # Создаем структуру данных
+        json_data = {
+            "metadata": {
+                "version": "2.1.0",
+                "program_name": "Анализатор документов",
+                "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "total_files": len(self.processed_files) + len(self.failed_files),
+                "successful_files": len(self.processed_files),
+                "failed_files": len(self.failed_files),
+                "success_rate": round((len(self.processed_files) / (len(self.processed_files) + len(self.failed_files)) * 100), 1) if (len(self.processed_files) + len(self.failed_files)) > 0 else 0,
+                "total_processing_time": round(total_time, 2),
+                "processing_time_formatted": time_str,
+                "selected_folders": self.selected_folders,
+                "file_filters": {k: v.get() for k, v in self.file_filters.items()}
+            },
+            "statistics": self.statistics,
+            "files": []
+        }
+        
+        # Добавляем информацию о каждом файле
+        for filepath, file_info in self.file_details.items():
+            # Создаем копию информации о файле для JSON
+            file_data = {
+                "path": file_info['path'],
+                "filename": file_info['filename'],
+                "extension": file_info['extension'],
+                "size_bytes": file_info['size'],
+                "size_formatted": self._format_file_size(file_info['size']),
+                "status": file_info['status'],
+                "processing_time_seconds": file_info['processing_time'],
+                "text_length": file_info['text_length'],
+                "timestamp": file_info['timestamp']
+            }
+            
+            # Добавляем текст только для успешно обработанных файлов
+            if file_info['status'] == 'success':
+                file_data['extracted_text'] = file_info['text']
+            else:
+                file_data['extracted_text'] = ""
+                file_data['errors'] = file_info['errors']
+            
+            json_data["files"].append(file_data)
+        
+        return json_data
+    
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Форматирование размера файла"""
+        if size_bytes < 1024:
+            return f"{size_bytes} Б"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} КБ"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} МБ"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} ГБ"
+    
     def save_results(self):
         """Сохранение результатов"""
-        if not self.full_text_parts:
+        if not self.full_text_parts and not self.file_details:
             messagebox.showwarning("Предупреждение", "Нет результатов для сохранения. Сначала запустите анализ документов.")
             return
         
-        # Прямо открываем диалог сохранения с выбором формата
+        # Открываем диалог сохранения с выбором формата
         filetypes = [
             ('Text Files', '*.txt'),
             ('Markdown', '*.md'),
-            ('Word Document', '*.docx')
+            ('Word Document', '*.docx'),
+            ('JSON Data', '*.json')
         ]
         
         path = filedialog.asksaveasfilename(
@@ -1662,16 +1784,29 @@ class DocumentAnalyzerGUI:
                 # Определяем формат по расширению файла
                 ext = Path(path).suffix.lower()
                 
-                if ext == '.docx':
+                if ext == '.json':
+                    # Сохраняем в JSON формате
+                    json_data = self.create_json_data()
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump(json_data, f, ensure_ascii=False, indent=2)
+                    
+                    self.log_message(f"✅ JSON результат сохранён: {path}")
+                    
+                elif ext == '.docx':
+                    # Сохраняем в Word формате
                     doc = Document()
                     for part in self.full_text_parts:
                         doc.add_paragraph(part)
                     doc.save(path)
+                    
+                    self.log_message(f"✅ Word результат сохранён: {path}")
+                    
                 else:
+                    # Сохраняем в текстовом формате
                     with open(path, 'w', encoding='utf-8') as f:
                         f.write("\n".join(self.full_text_parts))
-                
-                self.log_message(f"✅ Результат сохранён: {path}")
+                    
+                    self.log_message(f"✅ Текстовый результат сохранён: {path}")
                 
                 # Сохраняем кэш
                 self.cache_manager.save_cache()
