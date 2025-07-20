@@ -52,7 +52,7 @@ brew install poppler
 
 ### 4. Проверка установки
 ```bash
-python тест_ocr.py
+python document_analyzer_improved.py
 ```
 
 ### 5. Запуск программы
